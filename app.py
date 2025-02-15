@@ -12,14 +12,26 @@ import chromadb
 import time
 import random
 import hashlib
-import json
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File  
+import logging  
+import uvicorn  
+from typing import List
 
 # load emvironment variables
 load_dotenv()
 api_key=os.getenv("GOOGLE_API_KEY")
+UPLOAD_DIR = "uploads"
+
+if not os.path.exists(UPLOAD_DIR):
+    os.makedirs(UPLOAD_DIR)
 # one thing i noticed if you device varables have same names as the .env files it will get the device variables
 genai.configure(api_key=api_key)
+# Initialize FastAPI app
+app = FastAPI()
 
+# Configure logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 # Configure ChromaDB with local storage path
 # clinet will change for cloud storage
 client = chromadb.PersistentClient(path="./chroma_db")  # Specify the directory for database files
@@ -30,8 +42,10 @@ collection = client.get_or_create_collection("docs_collection")
 def get_text_from_pdf(file_path):
     """
     Reads text from a PDF file.
-    :param file_path: The path to the PDF file.
-    :return: The text from the PDF file
+    Args:
+        file_path: str - The path to the PDF file.
+    Returns:
+        str - The text from the PDF file.
     """
     try:
         pdf = PdfReader(file_path)
@@ -46,8 +60,10 @@ def get_text_from_pdf(file_path):
 def get_text_from_txt(file_path):
     """
     Reads text from a TXT file.
-    :param file_path: The path to the TXT file.
-    :return: The text from the TXT file
+    Args:
+        file_path: str - The path to the TXT file.
+    Returns:
+        str - The text from the TXT file.
     """
     try:
         with open(file_path, "r", encoding="utf-8") as file:
@@ -59,8 +75,10 @@ def get_text_from_txt(file_path):
 def get_chunks(text):
     """
     Splits text into chunks.
-    :param text (str): The text to split.
-    :rtype-list[str]: A list of text chunks.
+    Args:
+        text: str - The text to split.
+    Returns:
+        list[str] - A list of text chunks.
     """
     try:
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=300)
@@ -73,7 +91,10 @@ def get_chunks(text):
 def generate_doc_id():
     """
     Generates a unique, compact ID  to store vectors in the database.
-    rtype: str - A unique ID
+    Args:
+        None
+    Returns:
+        str - A unique ID
     """
     try:
         timestamp = int(time.time()).to_bytes(4, 'big')  # 4 bytes of UNIX timestamp
@@ -130,7 +151,7 @@ def process_files(files):
     Args:
         files: list[str] - A list of file paths to process.
     Returns:
-        None
+        bool - True if successful, False otherwise.
     """
     # Yet to be tested
     try:
@@ -150,15 +171,25 @@ def process_files(files):
                 continue
             chunks=get_chunks(text)# get chunks
             store_vectors(chunks)# store vectors
+        return True
     except Exception as e:
         print(f"Error processing files: {e}")
-        return None
+        return False
 
 def get_conversational_chain():
-    """Loads the conversational chain with Gemini API"""
+    """
+    Loads the conversational chain with Gemini API
+    Args:
+        None
+    Returns:
+        chain: function - The conversational chain function.
+    """
     prompt_template = """
-   You are a knowledgeable assistant. Use the provided context to answer the question in detail. If the answer is not in the context, say: 'The answer is not available in the provided context,' then continue answering based on what you know.'
-    
+    You are a knowledgeable assistant. Use the provided context to answer the question in detail. 
+    If the answer is not in the context, say: 'The answer is not available in the provided context,' 
+    then continue answering based on what you know.'
+
+
     Context:\n{context}\n
     Question:\n{question}\n
     
@@ -171,36 +202,100 @@ def get_conversational_chain():
     return chain
 
 def ask_llm(user_prompt):
-    """Queries the LLM after retrieving relevant documents"""
+    """
+    Queries the LLM after retrieving relevant documents
+    Args:
+        user_prompt: str - The user's question prompt.
+    Returns:
+        response: str - The LLM's response.
+    """
+    try:
     
-    # Initialize embeddings
-    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")  # Ensure this model exists
+        # Initialize embeddings
+        embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")  # Ensure this model exists
 
-    # Initialize ChromaDB client and collection
-    client = chromadb.PersistentClient(path="./chroma_db")
-    collection = client.get_or_create_collection(name="docs_collection")
+        # Initialize ChromaDB client and collection
+        client = chromadb.PersistentClient(path="./chroma_db")
+        collection = client.get_or_create_collection(name="docs_collection")
 
-    # Perform similarity search
-    results = collection.query(
-        query_embeddings=[embeddings.embed_query(user_prompt)],
-        n_results=1  
-    )
+        # Perform similarity search
+        results = collection.query(
+            query_embeddings=[embeddings.embed_query(user_prompt)],
+            n_results=5  
+        )
 
-    print(results)
+        print(results)
 
-    # Load conversational chain
-    chain = get_conversational_chain()
-    
-    # Retrieve documents and convert them to Document objects
-    docs = [
-        Document(page_content=doc) for doc in results["documents"][0]
-    ] if results["documents"] else []
+        # Load conversational chain
+        chain = get_conversational_chain()
+        
+        # Retrieve documents and convert them to Document objects
+        docs = [
+            Document(page_content=doc) for doc in results["documents"][0]
+        ] if results["documents"] else []
 
-    # Generate response
-    response = chain(
-        {"input_documents": docs, "question": user_prompt},
-        return_only_outputs=True
-    )
+        # Generate response
+        response = chain(
+            {"input_documents": docs, "question": user_prompt},
+            return_only_outputs=True
+        )
 
-    return response
+        return response
+    except Exception as e:
+        print(f"Error asking LLM: {e}")
+        return None
 
+# Example GET route
+@app.get("/status")
+async def health_check():
+    return {"message": "API is running successfully", "status_code": 200}
+
+# Example POST route
+@app.post("/upload-files")
+async def upload_files(files: List[UploadFile] = File(...)):
+    # not tested
+    try:
+        file_paths = []
+
+        for file in files:
+            file_path = os.path.join(UPLOAD_DIR, file.filename)
+            
+            # Save the file
+            with open(file_path, "wb") as buffer:
+                buffer.write(await file.read())
+            
+            file_paths.append(file_path)
+
+        # Process files
+        success = process_files(file_paths)
+
+        # Remove files after processing
+        for file_path in file_paths:
+            os.remove(file_path)
+
+        if success:
+            return {"message": "Success", "data": file_paths, "status_code": 200}
+        else:
+            return {"message": "Failure", "data": None, "status_code": 500}
+
+    except Exception as e:
+        logger.error(f"File upload failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+async def get_user_prompt(request: Request):
+    # not tested
+    try:
+        data = await request.json()
+        prompt=data["user_prompt"]
+        result=ask_llm(prompt)
+        if result is None:
+            return {"message": "Failure", "data": None, "status_code": 500}
+        else:
+            return {"message": "Success", "data": result, "status_code": 200}
+
+    except Exception as e:
+        logger.error(f"User prompt failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=5000, reload=False)
