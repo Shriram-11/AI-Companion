@@ -195,7 +195,7 @@ def get_conversational_chain():
     
     Answer:
     """
-    model = ChatGoogleGenerativeAI(model="gemini-pro",api_key="KEY",temperature=0.3)
+    model = ChatGoogleGenerativeAI(model="gemini-pro",api_key=api_key,temperature=0.3)
     prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
     chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
 
@@ -248,6 +248,7 @@ def ask_llm(user_prompt):
 # Example GET route
 @app.get("/status")
 async def health_check():
+
     return {"message": "API is running successfully", "status_code": 200}
 
 # Example POST route
@@ -281,7 +282,7 @@ async def upload_files(files: List[UploadFile] = File(...)):
     except Exception as e:
         logger.error(f"File upload failed: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
-
+@app.post("/ask")
 async def get_user_prompt(request: Request):
     # not tested
     try:
@@ -298,4 +299,4 @@ async def get_user_prompt(request: Request):
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=5000, reload=False)
+    uvicorn.run("app:app", host="0.0.0.0", port=5000, reload=False)
