@@ -1,7 +1,7 @@
 name: CI/CD Pipeline
 
-trigger:
-  workflow_dispatch:
+on:
+  workflow_dispatch:  # This is the correct syntax to trigger manually from the GitHub UI
 
 jobs:
   build:
@@ -9,10 +9,10 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v2
+      uses: actions/checkout@v3  # Updated to v3
 
     - name: Set up Python
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@v4  # Updated to v4
       with:
         python-version: '3.12'
 
@@ -20,6 +20,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
+        pip install pytest  # Ensure pytest is installed if not in requirements.txt
 
     - name: Run tests
       run: |
