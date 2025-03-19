@@ -254,14 +254,13 @@ async def health_check():
 # Example POST route
 @app.post("/upload-files")
 async def upload_files(files: List[UploadFile] = File(...)):
-    # not tested
     try:
         file_paths = []
 
         for file in files:
             file_path = os.path.join(UPLOAD_DIR, file.filename)
             
-            # Save the file
+            # Save the file asynchronously
             with open(file_path, "wb") as buffer:
                 buffer.write(await file.read())
             
@@ -281,7 +280,8 @@ async def upload_files(files: List[UploadFile] = File(...)):
 
     except Exception as e:
         logger.error(f"File upload failed: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal Server Error")
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
 @app.post("/ask")
 async def get_user_prompt(request: Request):
     # not tested
