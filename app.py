@@ -15,8 +15,12 @@ import hashlib
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File  
 import logging  
 import uvicorn  
+import traceback
 from typing import List
-
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+import json
+from fastapi.middleware.cors import CORSMiddleware
 # load emvironment variables
 load_dotenv()
 api_key=os.getenv("GOOGLE_API_KEY")
@@ -28,7 +32,13 @@ if not os.path.exists(UPLOAD_DIR):
 genai.configure(api_key=api_key)
 # Initialize FastAPI app
 app = FastAPI()
-
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -189,15 +199,14 @@ def get_conversational_chain():
     If the answer is not in the context, say: 'The answer is not available in the provided context,' 
     then continue answering based on what you know.'
 
-
     Context:\n{context}\n
     Question:\n{question}\n
     
     Answer:
     """
-    model = ChatGoogleGenerativeAI(model="gemini-pro",api_key=api_key,temperature=0.3)
+    model = ChatGoogleGenerativeAI(model="gemini-1.5-pro", api_key=api_key, temperature=0.3)
     prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
-    chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
+    chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)  # Updated chain_type
 
     return chain
 
@@ -210,7 +219,6 @@ def ask_llm(user_prompt):
         response: str - The LLM's response.
     """
     try:
-    
         # Initialize embeddings
         embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")  # Ensure this model exists
 
@@ -221,10 +229,12 @@ def ask_llm(user_prompt):
         # Perform similarity search
         results = collection.query(
             query_embeddings=[embeddings.embed_query(user_prompt)],
-            n_results=5  
+            n_results=1  # Adjusted to 1 for simplicity
         )
 
-        print(results)
+        # Check if documents are retrieved
+        if not results["documents"]:
+            return {"output_text": "No relevant documents found."}
 
         # Load conversational chain
         chain = get_conversational_chain()
@@ -232,10 +242,10 @@ def ask_llm(user_prompt):
         # Retrieve documents and convert them to Document objects
         docs = [
             Document(page_content=doc) for doc in results["documents"][0]
-        ] if results["documents"] else []
+        ]
 
         # Generate response
-        response = chain(
+        response = chain.invoke(
             {"input_documents": docs, "question": user_prompt},
             return_only_outputs=True
         )
@@ -243,7 +253,7 @@ def ask_llm(user_prompt):
         return response
     except Exception as e:
         print(f"Error asking LLM: {e}")
-        return None
+        return {"output_text": "An error occurred while processing your request."}
 
 # Example GET route
 @app.get("/status")
@@ -284,19 +294,76 @@ async def upload_files(files: List[UploadFile] = File(...)):
 
 @app.post("/ask")
 async def get_user_prompt(request: Request):
-    # not tested
     try:
+        body = await request.body()
+        if not body:
+            return JSONResponse({"error": "Empty request body"}, status_code=400)
         data = await request.json()
-        prompt=data["user_prompt"]
-        result=ask_llm(prompt)
+        if not data:
+            raise ValueError("Empty JSON payload.")
+        prompt = data.get("user_prompt", "")
+        logger.info(f"User prompt received: {prompt}")
+        prompt = str(prompt)
+        if not prompt:
+            raise ValueError("No user prompt provided.")
+        
+        result = ask_llm(prompt)
         if result is None:
             return {"message": "Failure", "data": None, "status_code": 500}
         else:
-            return {"message": "Success", "data": result, "status_code": 200}
+            return {"message": "Success", "data": {"output_text": result}, "status_code": 200}
 
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    except ValueError as ve:
+        error_traceback = traceback.format_exc()
+        logger.error(f"User prompt failed: {str(ve)}\nStack trace: {error_traceback}")
+        logger.error(f"User prompt failed: {str(ve)}")
+        raise HTTPException(status_code=400, detail=f"Bad Request: {str(ve)}")
     except Exception as e:
         logger.error(f"User prompt failed: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
+def check_gemini_llm():
+    """
+    Checks if the Gemini LLM is responding.
+    Args:
+        None
+    Returns:
+        bool - True if the LLM is responding, False otherwise.
+    """
+    try:
+        model = ChatGoogleGenerativeAI(model="gemini-1.5-pro", api_key=api_key, temperature=0.3)
+        response = model.invoke("Hello, are you there?")
+        return response is not None
+    except Exception as e:
+        print(f"Error checking Gemini LLM: {e}")
+        return False
+
+@app.get("/health")
+def health_check():
+    """
+    Health check endpoint.
+    Args:
+        None
+    Returns:
+        dict - The health status.
+    """
+    return {"status": "UP"}
+
+@app.get("/health_status")
+def health_status():
+    """
+    Health status endpoint.
+    Args:
+        None
+    Returns:
+        dict - The health status.
+    """
+    return {"status": "UP"}
+
 if __name__ == "__main__":
-    uvicorn.run("app:app", host="0.0.0.0", port=5000, reload=False)
+    if check_gemini_llm():
+        uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)  # Ensure host and port are correct
+    else:
+        print("Gemini LLM is not responding. Please check the configuration and try again.")
