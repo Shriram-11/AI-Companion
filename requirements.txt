@@ -10,5 +10,5 @@ langchain==0.3.30
 langchain-google-genai==2.0.9
 google-generativeai==0.8.4
 
-pytest==8.3.5
+pytest==9.0.3
 httpx==0.28.1
